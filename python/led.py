@@ -4,6 +4,7 @@ from __future__ import division
 import platform
 import numpy as np
 import config
+import os
 
 # ESP8266 uses WiFi communication
 if config.DEVICE == 'esp8266':
@@ -30,6 +31,18 @@ elif config.DEVICE == 'blinkstick':
     # Create a listener that turns the leds off when the program terminates
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+elif config.DEVICE == 'socket':
+    if os.path.exists("/tmp/led-strip.sock"):
+        os.remove("/tmp/led-strip.sock")
+
+    print("Opening socket...")
+    import socket
+    s = socket.socket(socket.AF_UNIX) #, socket.SOCK_DGRAM)
+    s.bind("/tmp/led-strip.sock")
+    os.chmod("/tmp/led-strip.sock", 0777)
+    s.listen(1)
+
+    _sock, addr = s.accept()
 
 _gamma = np.load(config.GAMMA_TABLE_PATH)
 """Gamma lookup table used for nonlinear brightness correction"""
@@ -57,7 +70,7 @@ def _update_esp8266():
         g (0 to 255): Green value of LED
         b (0 to 255): Blue value of LED
     """
-    global pixels, _prev_pixels
+    global pixels, _prev_pixels, _sock
     # Truncate values and cast to integer
     pixels = np.clip(pixels, 0, 255).astype(int)
     # Optionally apply gamma correc tio
@@ -79,7 +92,17 @@ def _update_esp8266():
                 m.append(p[1][i])  # Pixel green value
                 m.append(p[2][i])  # Pixel blue value
         m = m if _is_python_2 else bytes(m)
-        _sock.sendto(m, (config.UDP_IP, config.UDP_PORT))
+        if config.DEVICE == 'esp8266':
+            _sock.sendto(m, (config.UDP_IP, config.UDP_PORT))
+        elif config.DEVICE == 'socket':
+            try:
+                _sock.send(m)
+            except Exception as e: 
+                print(e)
+                print('Disconnected, waitig for new connection')
+                _sock, addr = s.accept()
+                pass
+
     _prev_pixels = np.copy(p)
 
 
@@ -143,6 +166,8 @@ def update():
         _update_pi()
     elif config.DEVICE == 'blinkstick':
         _update_blinkstick()
+    elif config.DEVICE == 'socket':
+        _update_esp8266()
     else:
         raise ValueError('Invalid device selected')
 
